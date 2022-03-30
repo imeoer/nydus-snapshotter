@@ -8,6 +8,7 @@ package converter
 
 import (
 	"context"
+	"fmt"
 	"io"
 )
 
@@ -46,6 +47,32 @@ func newWriteCloser(wc io.WriteCloser, action func() error) *writeCloser {
 	return &writeCloser{
 		WriteCloser: wc,
 		action:      action,
+	}
+}
+
+type readerAtToReader struct {
+	io.ReaderAt
+	pos int64
+}
+
+func (ra *readerAtToReader) Read(p []byte) (int, error) {
+	n, err := ra.ReaderAt.ReadAt(p, ra.pos)
+	ra.pos += int64(len(p))
+	return n, err
+}
+
+func (ra *readerAtToReader) Seek(offset int64, whence int) (int64, error) {
+	if whence != io.SeekCurrent {
+		return 0, fmt.Errorf("only support SeekCurrent whence")
+	}
+	ra.pos += offset
+	return ra.pos, nil
+}
+
+func newReaderAtToReader(ra io.ReaderAt) *readerAtToReader {
+	return &readerAtToReader{
+		ReaderAt: ra,
+		pos:      0,
 	}
 }
 
