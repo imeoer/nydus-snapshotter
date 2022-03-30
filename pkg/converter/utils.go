@@ -7,9 +7,13 @@
 package converter
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 )
 
 type readCloser struct {
@@ -93,4 +97,83 @@ func newCtxReader(ctx context.Context, reader io.Reader) io.Reader {
 		ctx:    ctx,
 		reader: reader,
 	}
+}
+
+// packToTar makes .tar(.gz) stream of file named `name` and return reader.
+func packToTar(src string, name string, compress bool) (io.ReadCloser, error) {
+	fi, err := os.Stat(src)
+	if err != nil {
+		return nil, err
+	}
+
+	dirHdr := &tar.Header{
+		Name:     filepath.Dir(name),
+		Mode:     0755,
+		Typeflag: tar.TypeDir,
+	}
+
+	hdr := &tar.Header{
+		Name: name,
+		Mode: 0444,
+		Size: fi.Size(),
+	}
+
+	reader, writer := io.Pipe()
+
+	go func() {
+		// Prepare targz writer
+		var tw *tar.Writer
+		var gw *gzip.Writer
+		var err error
+		var file *os.File
+
+		if compress {
+			gw = gzip.NewWriter(writer)
+			tw = tar.NewWriter(gw)
+		} else {
+			tw = tar.NewWriter(writer)
+		}
+
+		defer func() {
+			err1 := tw.Close()
+			var err2 error
+			if gw != nil {
+				err2 = gw.Close()
+			}
+
+			var finalErr error
+
+			// Return the first error encountered to the other end and ignore others.
+			if err != nil {
+				finalErr = err
+			} else if err1 != nil {
+				finalErr = err1
+			} else if err2 != nil {
+				finalErr = err2
+			}
+
+			writer.CloseWithError(finalErr)
+		}()
+
+		file, err = os.Open(src)
+		if err != nil {
+			return
+		}
+		defer file.Close()
+
+		// Write targz stream
+		if err = tw.WriteHeader(dirHdr); err != nil {
+			return
+		}
+
+		if err = tw.WriteHeader(hdr); err != nil {
+			return
+		}
+
+		if _, err = io.Copy(tw, file); err != nil {
+			return
+		}
+	}()
+
+	return reader, nil
 }
