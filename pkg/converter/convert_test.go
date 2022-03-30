@@ -259,12 +259,13 @@ func buildChunkDict(t *testing.T, workDir string) (string, string) {
 		},
 	}
 
-	finalBootstrapReader, err := Merge(context.TODO(), layers, MergeOption{})
-	require.NoError(t, err)
-	defer finalBootstrapReader.Close()
-
 	bootstrapPath := filepath.Join(workDir, "dict-bootstrap")
-	writeToFile(t, finalBootstrapReader, bootstrapPath)
+	file, err := os.Create(bootstrapPath)
+	require.NoError(t, err)
+	defer file.Close()
+
+	err = Merge(context.TODO(), layers, file, MergeOption{})
+	require.NoError(t, err)
 
 	dictBlobPath := ""
 	err = filepath.WalkDir(blobDir, func(path string, entry fs.DirEntry, err error) error {
@@ -325,14 +326,15 @@ func TestConverter(t *testing.T) {
 		},
 	}
 
-	finalBootstrapReader, err := Merge(context.TODO(), layers, MergeOption{
+	bootstrapPath := filepath.Join(workDir, "bootstrap")
+	file, err := os.Create(bootstrapPath)
+	require.NoError(t, err)
+	defer file.Close()
+
+	err = Merge(context.TODO(), layers, file, MergeOption{
 		ChunkDictPath: chunkDictBootstrapPath,
 	})
 	require.NoError(t, err)
-	defer finalBootstrapReader.Close()
-
-	bootstrapPath := filepath.Join(workDir, "bootstrap")
-	writeToFile(t, finalBootstrapReader, bootstrapPath)
 
 	verify(t, workDir)
 	dropCache(t)
