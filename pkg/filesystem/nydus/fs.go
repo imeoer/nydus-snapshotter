@@ -38,6 +38,7 @@ type filesystem struct {
 	sharedDaemon     *daemon.Daemon
 	daemonCfg        config.DaemonConfig
 	vpcRegistry      bool
+	daemonBackend    string
 	nydusdBinaryPath string
 	mode             fspkg.Mode
 	logLevel         string
@@ -79,6 +80,7 @@ func (fs *filesystem) newSharedDaemon() (*daemon.Daemon, error) {
 		daemon.WithLogLevel(fs.logLevel),
 		daemon.WithLogToStdout(fs.logToStdout),
 		daemon.WithNydusdThreadNum(fs.nydusdThreadNum),
+		daemon.WithDaemonBackend(fs.daemonBackend),
 		modeOpt,
 	)
 	if err != nil {
@@ -221,7 +223,7 @@ func (fs *filesystem) NewDaemonConfig(labels map[string]string) (config.DaemonCo
 		return config.DaemonConfig{}, fmt.Errorf("no image ID found in label")
 	}
 
-	cfg, err := config.NewDaemonConfig(fs.daemonCfg, imageID, fs.vpcRegistry, labels)
+	cfg, err := config.NewDaemonConfig(fs.daemonBackend, fs.daemonCfg, imageID, fs.vpcRegistry, labels)
 	if err != nil {
 		return config.DaemonConfig{}, err
 	}
@@ -349,6 +351,7 @@ func (fs *filesystem) createNewDaemon(snapshotID string, imageID string) (*daemo
 		daemon.WithLogToStdout(fs.logToStdout),
 		daemon.WithCustomMountPoint(customMountPoint),
 		daemon.WithNydusdThreadNum(fs.nydusdThreadNum),
+		daemon.WithDaemonBackend(fs.daemonBackend),
 	); err != nil {
 		return nil, err
 	}
@@ -386,6 +389,7 @@ func (fs *filesystem) createSharedDaemon(snapshotID string, imageID string) (*da
 		daemon.WithLogLevel(fs.logLevel),
 		daemon.WithLogToStdout(fs.logToStdout),
 		daemon.WithNydusdThreadNum(fs.nydusdThreadNum),
+		daemon.WithDaemonBackend(fs.daemonBackend),
 	); err != nil {
 		return nil, err
 	}
@@ -397,9 +401,19 @@ func (fs *filesystem) createSharedDaemon(snapshotID string, imageID string) (*da
 
 // generateDaemonConfig generate Daemon configuration
 func (fs *filesystem) generateDaemonConfig(d *daemon.Daemon, labels map[string]string) error {
-	cfg, err := config.NewDaemonConfig(fs.daemonCfg, d.ImageID, fs.vpcRegistry, labels)
+	cfg, err := config.NewDaemonConfig(d.DaemonBackend, fs.daemonCfg, d.ImageID, fs.vpcRegistry, labels)
 	if err != nil {
 		return errors.Wrapf(err, "failed to generate daemon config for daemon %s", d.ID)
+	}
+
+	if d.DaemonBackend == config.DaemonBackendErofs {
+		cfg.Config.CacheConfig.WorkDir = d.ErofsWorkDir()
+		bootstrapPath, err := d.BootstrapFile()
+		if err != nil {
+			return errors.Wrap(err, "get bootstrap path")
+		}
+		cfg.Config.MetadataPath = bootstrapPath
+		return config.SaveConfig(cfg.ErofsDaemonConfig, d.ConfigFile())
 	}
 
 	if fs.cacheMgr != nil {

@@ -97,6 +97,7 @@ func NewSnapshotter(ctx context.Context, cfg *config.Config) (snapshots.Snapshot
 		NydusdBinaryPath: cfg.NydusdBinaryPath,
 		Database:         db,
 		DaemonMode:       cfg.DaemonMode,
+		CacheDir:         cfg.CacheDir,
 	})
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to new process manager")
@@ -110,6 +111,7 @@ func NewSnapshotter(ctx context.Context, cfg *config.Config) (snapshots.Snapshot
 		nydus.WithVPCRegistry(cfg.ConvertVpcRegistry),
 		nydus.WithVerifier(verifier),
 		nydus.WithDaemonMode(cfg.DaemonMode),
+		nydus.WithDaemonBackend(cfg.DaemonBackend),
 		nydus.WithLogLevel(cfg.LogLevel),
 		nydus.WithLogDir(cfg.LogDir),
 		nydus.WithLogToStdout(cfg.LogToStdout),

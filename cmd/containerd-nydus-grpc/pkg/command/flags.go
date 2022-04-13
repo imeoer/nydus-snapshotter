@@ -40,6 +40,7 @@ type Args struct {
 	NydusImageBinaryPath string
 	SharedDaemon         bool
 	DaemonMode           string
+	DaemonBackend        string
 	AsyncRemove          bool
 	EnableMetrics        bool
 	MetricsFile          string
@@ -139,6 +140,12 @@ func buildFlags(args *Args) []cli.Flag {
 			Value:       config.DefaultDaemonMode,
 			Usage:       "daemon mode to use, could be \"multiple\", \"shared\" or \"none\"",
 			Destination: &args.DaemonMode,
+		},
+		&cli.StringFlag{
+			Name:        "daemon-backend",
+			Value:       config.DaemonBackendFusedev,
+			Usage:       "daemon fs backend, could be \"fusedev\", \"erofs\"",
+			Destination: &args.DaemonBackend,
 		},
 		&cli.BoolFlag{
 			Name:        "async-remove",
@@ -240,6 +247,7 @@ func Validate(args *Args, cfg *config.Config) error {
 	cfg.DisableCacheManager = args.DisableCacheManager
 	cfg.EnableNydusOverlayFS = args.EnableNydusOverlayFS
 	cfg.NydusdThreadNum = args.NydusdThreadNum
+	cfg.DaemonBackend = args.DaemonBackend
 
 	d, err := time.ParseDuration(args.GCPeriod)
 	if err != nil {
