@@ -58,10 +58,13 @@ func (ra *seekReader) Read(p []byte) (int, error) {
 }
 
 func (ra *seekReader) Seek(offset int64, whence int) (int64, error) {
-	if whence != io.SeekCurrent {
-		return 0, fmt.Errorf("only support SeekCurrent whence")
+	if whence == io.SeekCurrent {
+		ra.pos += offset
+	} else if whence == io.SeekStart {
+		ra.pos = offset
+	} else {
+		return 0, fmt.Errorf("unsupported whence %d", whence)
 	}
-	ra.pos += offset
 	return ra.pos, nil
 }
 
