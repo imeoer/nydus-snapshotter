@@ -33,6 +33,7 @@ type PackOption struct {
 	ChunkDictPath    string
 	PrefetchPatterns string
 	Compressor       string
+	OCIRef           bool
 	Timeout          *time.Duration
 }
 
@@ -60,6 +61,10 @@ type outputJSON struct {
 }
 
 func Pack(option PackOption) error {
+	if option.OCIRef {
+		return packRef(option)
+	}
+
 	if option.FsVersion == "" {
 		option.FsVersion = "5"
 	}
@@ -79,6 +84,8 @@ func Pack(option PackOption) error {
 		"--fs-version",
 		option.FsVersion,
 		"--inline-bootstrap",
+		// "--features",
+		// "blob_toc",
 	}
 	if option.ChunkDictPath != "" {
 		args = append(args, "--chunk-dict", fmt.Sprintf("bootstrap=%s", option.ChunkDictPath))
@@ -104,6 +111,46 @@ func Pack(option PackOption) error {
 	cmd.Stdout = logger.Writer()
 	cmd.Stderr = logger.Writer()
 	cmd.Stdin = strings.NewReader(option.PrefetchPatterns)
+
+	if err := cmd.Run(); err != nil {
+		if errdefs.IsSignalKilled(err) && option.Timeout != nil {
+			logrus.WithError(err).Errorf("fail to run %v %+v, possibly due to timeout %v", option.BuilderPath, args, *option.Timeout)
+		} else {
+			logrus.WithError(err).Errorf("fail to run %v %+v", option.BuilderPath, args)
+		}
+		return err
+	}
+
+	return nil
+}
+
+func packRef(option PackOption) error {
+	args := []string{
+		"create",
+		"--log-level",
+		"warn",
+		"--type",
+		"targz-ref",
+		"--inline-bootstrap",
+		"--features",
+		"blob_toc",
+		"--blob-meta",
+		option.BlobPath,
+	}
+	args = append(args, option.SourcePath)
+
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if option.Timeout != nil {
+		ctx, cancel = context.WithTimeout(ctx, *option.Timeout)
+		defer cancel()
+	}
+
+	logrus.Debugf("\tCommand: %s %s", option.BuilderPath, strings.Join(args, " "))
+
+	cmd := exec.CommandContext(ctx, option.BuilderPath, args...)
+	cmd.Stdout = logger.Writer()
+	cmd.Stderr = logger.Writer()
 
 	if err := cmd.Run(); err != nil {
 		if errdefs.IsSignalKilled(err) && option.Timeout != nil {
