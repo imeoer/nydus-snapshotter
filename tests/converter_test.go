@@ -346,8 +346,8 @@ func buildChunkDict(t *testing.T, workDir string) (string, string) {
 	return bootstrapPath, filepath.Base(dictBlobPath)
 }
 
-// sudo go test -v -count=1 -run TestConverter ./tests
-func TestConverter(t *testing.T) {
+// sudo go test -v -count=1 -run TestPack ./tests
+func TestPack(t *testing.T) {
 	workDir, err := os.MkdirTemp("", "nydus-converter-test-")
 	require.NoError(t, err)
 	defer os.RemoveAll(workDir)
@@ -410,6 +410,29 @@ func TestConverter(t *testing.T) {
 	ensureFile(t, filepath.Join(cacheDir, chunkDictBlobHash)+".chunk_map")
 	ensureNoFile(t, filepath.Join(cacheDir, lowerNydusBlobDigest.Hex())+".chunk_map")
 	ensureFile(t, filepath.Join(cacheDir, upperNydusBlobDigest.Hex())+".chunk_map")
+}
+
+func TestUnpack(t *testing.T) {
+	workDir, err := os.MkdirTemp("", "nydus-converter-test-")
+	require.NoError(t, err)
+	defer os.RemoveAll(workDir)
+
+	ociTar := filepath.Join(workDir, "oci.tar")
+	ociTarReader := buildOCIUpperTar(t, ociTar)
+	nydusTar, _ := convertLayer(t, ociTarReader, "", workDir, *fsVersion)
+
+	tarTa, err := local.OpenReader(nydusTar)
+	require.NoError(t, err)
+	defer tarTa.Close()
+
+	_, newTarDigest := unpackLayer(t, workDir, tarTa)
+
+	ociTarReader, err = os.OpenFile(ociTar, os.O_RDONLY, 0644)
+	require.NoError(t, err)
+	ociTarDigest, err := digest.Canonical.FromReader(ociTarReader)
+	require.NoError(t, err)
+
+	require.Equal(t, ociTarDigest, newTarDigest)
 }
 
 // sudo go test -v -count=1 -run TestContainerdImageConvert ./tests
@@ -477,27 +500,4 @@ func TestContainerdImageConvert(t *testing.T) {
 		t.Fatalf("failed to check image %s: %v, \noutput:\n%s", targetImageRef, err, output)
 		return
 	}
-}
-
-func TestUnpack(t *testing.T) {
-	workDir, err := os.MkdirTemp("", "nydus-converter-test-")
-	require.NoError(t, err)
-	defer os.RemoveAll(workDir)
-
-	ociTar := filepath.Join(workDir, "oci.tar")
-	ociTarReader := buildOCIUpperTar(t, ociTar)
-	nydusTar, _ := convertLayer(t, ociTarReader, "", workDir, *fsVersion)
-
-	tarTa, err := local.OpenReader(nydusTar)
-	require.NoError(t, err)
-	defer tarTa.Close()
-
-	_, newTarDigest := unpackLayer(t, workDir, tarTa)
-
-	ociTarReader, err = os.OpenFile(ociTar, os.O_RDONLY, 0644)
-	require.NoError(t, err)
-	ociTarDigest, err := digest.Canonical.FromReader(ociTarReader)
-	require.NoError(t, err)
-
-	require.Equal(t, ociTarDigest, newTarDigest)
 }
