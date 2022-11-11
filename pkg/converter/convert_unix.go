@@ -340,6 +340,71 @@ func Pack(ctx context.Context, dest io.Writer, opt PackOption) (io.WriteCloser, 
 	return wc, nil
 }
 
+func PackRef(ctx context.Context, dest io.Writer, opt PackRefOption) (io.WriteCloser, error) {
+	workDir, err := ensureWorkDir(opt.WorkDir)
+	if err != nil {
+		return nil, errors.Wrap(err, "ensure work directory")
+	}
+	defer func() {
+		if err != nil {
+			os.RemoveAll(workDir)
+		}
+	}()
+
+	blobMetaPath := filepath.Join(workDir, "blob.meta")
+	blobMetaFifo, err := fifo.OpenFifo(ctx, blobMetaPath, syscall.O_CREAT|syscall.O_RDONLY|syscall.O_NONBLOCK, 0644)
+	if err != nil {
+		return nil, errors.Wrapf(err, "create fifo file")
+	}
+
+	sourcePath := filepath.Join(workDir, "blob.targz")
+	sourceFifo, err := fifo.OpenFifo(ctx, sourcePath, syscall.O_CREAT|syscall.O_WRONLY|syscall.O_NONBLOCK, 0644)
+	if err != nil {
+		defer blobMetaFifo.Close()
+		return nil, errors.Wrapf(err, "create fifo file")
+	}
+
+	pr, pw := io.Pipe()
+
+	go func() {
+		defer sourceFifo.Close()
+		buffer := bufPool.Get().(*[]byte)
+		defer bufPool.Put(buffer)
+		if _, err := io.CopyBuffer(sourceFifo, pr, *buffer); err != nil {
+			pr.CloseWithError(errors.Wrapf(err, "copy targz to fifo"))
+		}
+	}()
+
+	go func() {
+		defer blobMetaFifo.Close()
+		buffer := bufPool.Get().(*[]byte)
+		defer bufPool.Put(buffer)
+		if _, err := io.CopyBuffer(dest, blobMetaFifo, *buffer); err != nil {
+			pr.CloseWithError(errors.Wrapf(err, "copy blob meta fifo to nydus blob"))
+		}
+	}()
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- tool.PackRef(tool.PackRefOption{
+			BuilderPath: getBuilder(opt.BuilderPath),
+
+			BlobMetaPath: blobMetaPath,
+			SourcePath:   sourcePath,
+			Timeout:      opt.Timeout,
+		})
+	}()
+
+	wc := newWriteCloser(pw, func() error {
+		if err := <-errChan; err != nil {
+			return errors.Wrapf(err, "convert nydus ref")
+		}
+		return nil
+	})
+
+	return wc, nil
+}
+
 // Merge multiple nydus bootstraps (from each layer of image) to a final
 // bootstrap. And due to the possibility of enabling the `ChunkDictPath`
 // option causes the data deduplication, it will return the actual blob

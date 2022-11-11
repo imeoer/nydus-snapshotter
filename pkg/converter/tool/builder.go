@@ -36,6 +36,14 @@ type PackOption struct {
 	Timeout          *time.Duration
 }
 
+type PackRefOption struct {
+	BuilderPath string
+
+	BlobMetaPath string
+	SourcePath   string
+	Timeout      *time.Duration
+}
+
 type MergeOption struct {
 	BuilderPath string
 
@@ -104,6 +112,44 @@ func Pack(option PackOption) error {
 	cmd.Stdout = logger.Writer()
 	cmd.Stderr = logger.Writer()
 	cmd.Stdin = strings.NewReader(option.PrefetchPatterns)
+
+	if err := cmd.Run(); err != nil {
+		if errdefs.IsSignalKilled(err) && option.Timeout != nil {
+			logrus.WithError(err).Errorf("fail to run %v %+v, possibly due to timeout %v", option.BuilderPath, args, *option.Timeout)
+		} else {
+			logrus.WithError(err).Errorf("fail to run %v %+v", option.BuilderPath, args)
+		}
+		return err
+	}
+
+	return nil
+}
+
+func PackRef(option PackRefOption) error {
+	args := []string{
+		"create",
+		"--log-level",
+		"warn",
+		"--type",
+		"targz-ref",
+		"--inline-bootstrap",
+		"--blob-meta",
+		option.BlobMetaPath,
+	}
+	args = append(args, option.SourcePath)
+
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if option.Timeout != nil {
+		ctx, cancel = context.WithTimeout(ctx, *option.Timeout)
+		defer cancel()
+	}
+
+	logrus.Debugf("\tCommand: %s %s", option.BuilderPath, strings.Join(args, " "))
+
+	cmd := exec.CommandContext(ctx, option.BuilderPath, args...)
+	cmd.Stdout = logger.Writer()
+	cmd.Stderr = logger.Writer()
 
 	if err := cmd.Run(); err != nil {
 		if errdefs.IsSignalKilled(err) && option.Timeout != nil {

@@ -34,6 +34,15 @@ type Backend interface {
 	Type() string
 }
 
+type PackRefOption struct {
+	// WorkDir is used as the work directory during layer pack.
+	WorkDir string
+	// BuilderPath holds the path of `nydus-image` binary tool.
+	BuilderPath string
+	// Timeout cancels execution once exceed the specified time.
+	Timeout *time.Duration
+}
+
 type PackOption struct {
 	// WorkDir is used as the work directory during layer pack.
 	WorkDir string
