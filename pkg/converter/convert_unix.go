@@ -35,10 +35,12 @@ import (
 
 	"github.com/containerd/nydus-snapshotter/pkg/converter/tool"
 	"github.com/containerd/nydus-snapshotter/pkg/errdefs"
+	"github.com/containerd/nydus-snapshotter/pkg/label"
 )
 
 const bootstrapNameInTar = "image.boot"
 const blobNameInTar = "image.blob"
+const blobMetaNameInTar = "image.blob_meta"
 
 const envNydusBuilder = "NYDUS_BUILDER"
 const envNydusWorkDir = "NYDUS_WORKDIR"
@@ -246,6 +248,59 @@ func unpackBlobFromNydusTar(ra content.ReaderAt, target io.Writer) error {
 			}
 			if _, err := io.CopyN(target, reader, hdr.Size); err != nil {
 				return errors.Wrap(err, "copy blob data to reader")
+			}
+			return nil
+		}
+	}
+
+	return nil
+}
+
+func UnpackBlobMetaFromNydusTar(ra content.ReaderAt, target io.Writer) error {
+	cur := ra.Size()
+	reader := newSeekReader(ra)
+
+	const headerSize = 512
+
+	// Seek from tail to head of nydus formatted tar stream to find nydus
+	// bootstrap data.
+	for {
+		if headerSize > cur {
+			break
+		}
+
+		// Try to seek to the part of tar header.
+		var err error
+		cur, err = reader.Seek(cur-headerSize, io.SeekStart)
+		if err != nil {
+			return errors.Wrapf(err, "seek to %d for tar header", cur-headerSize)
+		}
+
+		tr := tar.NewReader(reader)
+		// Parse tar header.
+		hdr, err := tr.Next()
+		if err != nil {
+			return errors.Wrap(err, "parse tar header")
+		}
+
+		if hdr.Name == bootstrapNameInTar {
+			if hdr.Size > cur {
+				return fmt.Errorf("invalid tar format at pos %d", cur)
+			}
+			cur, err = reader.Seek(cur-hdr.Size, io.SeekStart)
+			if err != nil {
+				return errors.Wrap(err, "seek to bootstrap data offset")
+			}
+		} else if hdr.Name == blobMetaNameInTar {
+			if hdr.Size > cur {
+				return fmt.Errorf("invalid tar format at pos %d", cur)
+			}
+			_, err = reader.Seek(cur-hdr.Size, io.SeekStart)
+			if err != nil {
+				return errors.Wrap(err, "seek to blob meta offset")
+			}
+			if _, err := io.CopyN(target, reader, hdr.Size); err != nil {
+				return errors.Wrap(err, "copy blob meta to reader")
 			}
 			return nil
 		}
@@ -657,6 +712,10 @@ func LayerConvertFunc(opt PackOption) converter.ConvertFunc {
 			},
 		}
 
+		if opt.OCIRef {
+			newDesc.Annotations[label.NydusRefLayer] = desc.Digest.String()
+		}
+
 		if opt.Backend != nil {
 			blobRa, err := cs.ReaderAt(ctx, newDesc)
 			if err != nil {
@@ -744,6 +803,7 @@ func convertManifest(ctx context.Context, cs content.Store, newDesc *ocispec.Des
 		WorkDir:       opt.WorkDir,
 		ChunkDictPath: opt.ChunkDictPath,
 		FsVersion:     opt.FsVersion,
+		OCIRef:        opt.OCIRef,
 		WithTar:       true,
 	})
 	if err != nil {
@@ -810,33 +870,45 @@ func MergeLayers(ctx context.Context, cs content.Store, descs []ocispec.Descript
 	layers := []Layer{}
 
 	var chainID digest.Digest
-	for _, blobDesc := range descs {
-		ra, err := cs.ReaderAt(ctx, blobDesc)
+	nydusBlobDigests := []digest.Digest{}
+	for _, nydusBlobDesc := range descs {
+		ra, err := cs.ReaderAt(ctx, nydusBlobDesc)
 		if err != nil {
-			return nil, nil, errors.Wrapf(err, "get reader for blob %q", blobDesc.Digest)
+			return nil, nil, errors.Wrapf(err, "get reader for blob %q", nydusBlobDesc.Digest)
 		}
 		defer ra.Close()
+		var originalDigest *digest.Digest
+		if opt.OCIRef {
+			digestStr := nydusBlobDesc.Annotations[label.NydusRefLayer]
+			_originalDigest := digest.FromString(digestStr)
+			if err := _originalDigest.Validate(); err != nil {
+				return nil, nil, errors.Wrapf(err, "invalid label %s=%s", label.NydusRefLayer, digestStr)
+			}
+			originalDigest = &_originalDigest
+		}
 		layers = append(layers, Layer{
-			Digest:   blobDesc.Digest,
-			ReaderAt: ra,
+			Digest:         nydusBlobDesc.Digest,
+			OriginalDigest: originalDigest,
+			ReaderAt:       ra,
 		})
 		if chainID == "" {
-			chainID = identity.ChainID([]digest.Digest{blobDesc.Digest})
+			chainID = identity.ChainID([]digest.Digest{nydusBlobDesc.Digest})
 		} else {
-			chainID = identity.ChainID([]digest.Digest{chainID, blobDesc.Digest})
+			chainID = identity.ChainID([]digest.Digest{chainID, nydusBlobDesc.Digest})
 		}
+		nydusBlobDigests = append(nydusBlobDigests, nydusBlobDesc.Digest)
 	}
 
 	// Merge all nydus bootstraps into a final nydus bootstrap.
 	pr, pw := io.Pipe()
-	blobDigestChan := make(chan []digest.Digest, 1)
+	originalBlobDigestChan := make(chan []digest.Digest, 1)
 	go func() {
 		defer pw.Close()
-		blobDigests, err := Merge(ctx, layers, pw, opt)
+		originalBlobDigests, err := Merge(ctx, layers, pw, opt)
 		if err != nil {
 			pw.CloseWithError(errors.Wrapf(err, "merge nydus bootstrap"))
 		}
-		blobDigestChan <- blobDigests
+		originalBlobDigestChan <- originalBlobDigests
 	}()
 
 	// Compress final nydus bootstrap to tar.gz and write into content store.
@@ -875,9 +947,17 @@ func MergeLayers(ctx context.Context, cs content.Store, descs []ocispec.Descript
 		return nil, nil, errors.Wrap(err, "get info from content store")
 	}
 
-	blobDigests := <-blobDigestChan
+	originalBlobDigests := <-originalBlobDigestChan
 	blobDescs := []ocispec.Descriptor{}
-	for _, blobDigest := range blobDigests {
+
+	var blobDigests []digest.Digest
+	if opt.OCIRef {
+		blobDigests = nydusBlobDigests
+	} else {
+		blobDigests = originalBlobDigests
+	}
+
+	for idx, blobDigest := range blobDigests {
 		blobInfo, err := cs.Info(ctx, blobDigest)
 		if err != nil {
 			return nil, nil, errors.Wrap(err, "get info from content store")
@@ -890,6 +970,9 @@ func MergeLayers(ctx context.Context, cs content.Store, descs []ocispec.Descript
 				LayerAnnotationUncompressed: blobDigest.String(),
 				LayerAnnotationNydusBlob:    "true",
 			},
+		}
+		if opt.OCIRef {
+			blobDesc.Annotations[label.NydusRefLayer] = originalBlobDigests[idx].String()
 		}
 		blobDescs = append(blobDescs, blobDesc)
 	}
