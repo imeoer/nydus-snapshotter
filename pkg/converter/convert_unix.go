@@ -370,27 +370,30 @@ func packRef(ctx context.Context, dest io.Writer, opt PackOption) (io.WriteClose
 
 	pr, pw := io.Pipe()
 
-	go func() {
+	eg := errgroup.Group{}
+
+	eg.Go(func() error {
 		defer sourceFifo.Close()
 		buffer := bufPool.Get().(*[]byte)
 		defer bufPool.Put(buffer)
 		if _, err := io.CopyBuffer(sourceFifo, pr, *buffer); err != nil {
-			pr.CloseWithError(errors.Wrapf(err, "copy targz to fifo"))
+			return errors.Wrapf(err, "copy targz to fifo")
 		}
-	}()
+		return nil
+	})
 
-	go func() {
+	eg.Go(func() error {
 		defer blobMetaFifo.Close()
 		buffer := bufPool.Get().(*[]byte)
 		defer bufPool.Put(buffer)
 		if _, err := io.CopyBuffer(dest, blobMetaFifo, *buffer); err != nil {
-			pr.CloseWithError(errors.Wrapf(err, "copy blob meta fifo to nydus blob"))
+			return errors.Wrapf(err, "copy blob meta fifo to nydus blob")
 		}
-	}()
+		return nil
+	})
 
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- tool.Pack(tool.PackOption{
+	eg.Go(func() error {
+		err := tool.Pack(tool.PackOption{
 			BuilderPath: getBuilder(opt.BuilderPath),
 
 			OCIRef:     opt.OCIRef,
@@ -398,10 +401,11 @@ func packRef(ctx context.Context, dest io.Writer, opt PackOption) (io.WriteClose
 			SourcePath: sourcePath,
 			Timeout:    opt.Timeout,
 		})
-	}()
+		return errors.Wrapf(err, "call builder")
+	})
 
 	wc := newWriteCloser(pw, func() error {
-		if err := <-errChan; err != nil {
+		if err := eg.Wait(); err != nil {
 			return errors.Wrapf(err, "convert nydus ref")
 		}
 		return nil
