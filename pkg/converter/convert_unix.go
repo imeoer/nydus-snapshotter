@@ -266,6 +266,10 @@ func unpackBlobFromNydusTar(ra content.ReaderAt, target io.Writer) error {
 // Important: the caller must check `io.WriteCloser.Close() == nil` to ensure
 // the conversion workflow is finished.
 func Pack(ctx context.Context, dest io.Writer, opt PackOption) (io.WriteCloser, error) {
+	if opt.OCIRef {
+		return packRef(ctx, dest, opt)
+	}
+
 	workDir, err := ensureWorkDir(opt.WorkDir)
 	if err != nil {
 		return nil, errors.Wrap(err, "ensure work directory")
@@ -340,7 +344,7 @@ func Pack(ctx context.Context, dest io.Writer, opt PackOption) (io.WriteCloser, 
 	return wc, nil
 }
 
-func PackRef(ctx context.Context, dest io.Writer, opt PackRefOption) (io.WriteCloser, error) {
+func packRef(ctx context.Context, dest io.Writer, opt PackOption) (io.WriteCloser, error) {
 	workDir, err := ensureWorkDir(opt.WorkDir)
 	if err != nil {
 		return nil, errors.Wrap(err, "ensure work directory")
@@ -386,12 +390,13 @@ func PackRef(ctx context.Context, dest io.Writer, opt PackRefOption) (io.WriteCl
 
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- tool.PackRef(tool.PackRefOption{
+		errChan <- tool.Pack(tool.PackOption{
 			BuilderPath: getBuilder(opt.BuilderPath),
 
-			BlobMetaPath: blobMetaPath,
-			SourcePath:   sourcePath,
-			Timeout:      opt.Timeout,
+			OCIRef:     opt.OCIRef,
+			BlobPath:   blobMetaPath,
+			SourcePath: sourcePath,
+			Timeout:    opt.Timeout,
 		})
 	}()
 
