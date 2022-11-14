@@ -35,10 +35,12 @@ import (
 
 	"github.com/containerd/nydus-snapshotter/pkg/converter/tool"
 	"github.com/containerd/nydus-snapshotter/pkg/errdefs"
+	"github.com/containerd/nydus-snapshotter/pkg/label"
 )
 
 const bootstrapNameInTar = "image.boot"
 const blobNameInTar = "image.blob"
+const blobMetaNameInTar = "image.blob_meta"
 
 const envNydusBuilder = "NYDUS_BUILDER"
 const envNydusWorkDir = "NYDUS_WORKDIR"
@@ -246,6 +248,59 @@ func unpackBlobFromNydusTar(ra content.ReaderAt, target io.Writer) error {
 			}
 			if _, err := io.CopyN(target, reader, hdr.Size); err != nil {
 				return errors.Wrap(err, "copy blob data to reader")
+			}
+			return nil
+		}
+	}
+
+	return nil
+}
+
+func UnpackBlobMetaFromNydusTar(ra content.ReaderAt, target io.Writer) error {
+	cur := ra.Size()
+	reader := newSeekReader(ra)
+
+	const headerSize = 512
+
+	// Seek from tail to head of nydus formatted tar stream to find nydus
+	// bootstrap data.
+	for {
+		if headerSize > cur {
+			break
+		}
+
+		// Try to seek to the part of tar header.
+		var err error
+		cur, err = reader.Seek(cur-headerSize, io.SeekStart)
+		if err != nil {
+			return errors.Wrapf(err, "seek to %d for tar header", cur-headerSize)
+		}
+
+		tr := tar.NewReader(reader)
+		// Parse tar header.
+		hdr, err := tr.Next()
+		if err != nil {
+			return errors.Wrap(err, "parse tar header")
+		}
+
+		if hdr.Name == bootstrapNameInTar {
+			if hdr.Size > cur {
+				return fmt.Errorf("invalid tar format at pos %d", cur)
+			}
+			cur, err = reader.Seek(cur-hdr.Size, io.SeekStart)
+			if err != nil {
+				return errors.Wrap(err, "seek to bootstrap data offset")
+			}
+		} else if hdr.Name == blobMetaNameInTar {
+			if hdr.Size > cur {
+				return fmt.Errorf("invalid tar format at pos %d", cur)
+			}
+			_, err = reader.Seek(cur-hdr.Size, io.SeekStart)
+			if err != nil {
+				return errors.Wrap(err, "seek to blob meta offset")
+			}
+			if _, err := io.CopyN(target, reader, hdr.Size); err != nil {
+				return errors.Wrap(err, "copy blob meta to reader")
 			}
 			return nil
 		}
@@ -657,6 +712,10 @@ func LayerConvertFunc(opt PackOption) converter.ConvertFunc {
 			},
 		}
 
+		if opt.OCIRef {
+			newDesc.Annotations[label.NydusRefLayer] = desc.Digest.String()
+		}
+
 		if opt.Backend != nil {
 			blobRa, err := cs.ReaderAt(ctx, newDesc)
 			if err != nil {
@@ -744,6 +803,7 @@ func convertManifest(ctx context.Context, cs content.Store, newDesc *ocispec.Des
 		WorkDir:       opt.WorkDir,
 		ChunkDictPath: opt.ChunkDictPath,
 		FsVersion:     opt.FsVersion,
+		OCIRef:        opt.OCIRef,
 		WithTar:       true,
 	})
 	if err != nil {
@@ -890,6 +950,9 @@ func MergeLayers(ctx context.Context, cs content.Store, descs []ocispec.Descript
 				LayerAnnotationUncompressed: blobDigest.String(),
 				LayerAnnotationNydusBlob:    "true",
 			},
+		}
+		if opt.OCIRef {
+			blobDesc.Annotations[label.NydusRefLayer] = blobDigest.String()
 		}
 		blobDescs = append(blobDescs, blobDesc)
 	}
