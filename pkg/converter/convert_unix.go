@@ -416,22 +416,27 @@ func Merge(ctx context.Context, layers []Layer, dest io.Writer, opt MergeOption)
 	}
 	defer os.RemoveAll(workDir)
 
+	getBootstrapPath := func(layerIdx int) string {
+		if digest := layers[layerIdx].OriginalDigest; digest != nil {
+			return filepath.Join(workDir, digest.Hex())
+		}
+		return filepath.Join(workDir, layers[layerIdx].Digest.Hex())
+	}
+
 	eg, _ := errgroup.WithContext(ctx)
 	sourceBootstrapPaths := []string{}
 	for idx := range layers {
-		sourceBootstrapPaths = append(sourceBootstrapPaths, filepath.Join(workDir, layers[idx].Digest.Hex()))
+		sourceBootstrapPaths = append(sourceBootstrapPaths, getBootstrapPath(idx))
 		eg.Go(func(idx int) func() error {
 			return func() error {
-				layer := layers[idx]
-
 				// Use the hex hash string of whole tar blob as the bootstrap name.
-				bootstrap, err := os.Create(filepath.Join(workDir, layer.Digest.Hex()))
+				bootstrap, err := os.Create(getBootstrapPath(idx))
 				if err != nil {
 					return errors.Wrap(err, "create source bootstrap")
 				}
 				defer bootstrap.Close()
 
-				if err := unpackBootstrapFromNydusTar(layer.ReaderAt, bootstrap); err != nil {
+				if err := unpackBootstrapFromNydusTar(layers[idx].ReaderAt, bootstrap); err != nil {
 					return errors.Wrap(err, "unpack nydus tar")
 				}
 
