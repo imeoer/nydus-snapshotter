@@ -239,7 +239,9 @@ func packLayerRef(t *testing.T, source io.ReadCloser, workDir string) (string, d
 		require.NoError(t, zw.Close())
 	}()
 
-	twc, err := converter.PackRef(context.TODO(), writer, converter.PackRefOption{})
+	twc, err := converter.Pack(context.TODO(), writer, converter.PackOption{
+		OCIRef: true,
+	})
 	require.NoError(t, err)
 
 	_, err = io.Copy(twc, pr)
