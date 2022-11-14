@@ -17,6 +17,8 @@ import (
 type Layer struct {
 	// Digest represents the hash of whole tar blob.
 	Digest digest.Digest
+	// Digest represents the original OCI tar(.gz) blob.
+	OriginalDigest *digest.Digest
 	// ReaderAt holds the reader of whole tar blob.
 	ReaderAt content.ReaderAt
 }

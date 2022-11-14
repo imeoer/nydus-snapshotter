@@ -463,8 +463,9 @@ func TestPackRef(t *testing.T) {
 
 	layers := []converter.Layer{
 		{
-			Digest:   lowerNydusBlobDigest,
-			ReaderAt: lowerTarRa,
+			Digest:         lowerNydusBlobDigest,
+			OriginalDigest: &lowerGzipBlobDigest,
+			ReaderAt:       lowerTarRa,
 		},
 	}
 
