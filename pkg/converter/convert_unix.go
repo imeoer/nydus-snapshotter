@@ -744,6 +744,7 @@ func convertManifest(ctx context.Context, cs content.Store, newDesc *ocispec.Des
 		WorkDir:       opt.WorkDir,
 		ChunkDictPath: opt.ChunkDictPath,
 		FsVersion:     opt.FsVersion,
+		OCIRef:        opt.OCIRef,
 		WithTar:       true,
 	})
 	if err != nil {
@@ -908,6 +909,10 @@ func MergeLayers(ctx context.Context, cs content.Store, descs []ocispec.Descript
 			// Use this annotation to identify nydus bootstrap layer.
 			LayerAnnotationNydusBootstrap: "true",
 		},
+	}
+
+	if opt.OCIRef {
+		bootstrapDesc.Annotations[LayerAnnotationNydusRef] = "true"
 	}
 
 	return &bootstrapDesc, blobDescs, nil
