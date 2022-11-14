@@ -33,15 +33,8 @@ type PackOption struct {
 	ChunkDictPath    string
 	PrefetchPatterns string
 	Compressor       string
+	OCIRef           bool
 	Timeout          *time.Duration
-}
-
-type PackRefOption struct {
-	BuilderPath string
-
-	BlobMetaPath string
-	SourcePath   string
-	Timeout      *time.Duration
 }
 
 type MergeOption struct {
@@ -68,6 +61,10 @@ type outputJSON struct {
 }
 
 func Pack(option PackOption) error {
+	if option.OCIRef {
+		return packRef(option)
+	}
+
 	if option.FsVersion == "" {
 		option.FsVersion = "5"
 	}
@@ -125,7 +122,7 @@ func Pack(option PackOption) error {
 	return nil
 }
 
-func PackRef(option PackRefOption) error {
+func packRef(option PackOption) error {
 	args := []string{
 		"create",
 		"--log-level",
@@ -134,7 +131,7 @@ func PackRef(option PackRefOption) error {
 		"targz-ref",
 		"--inline-bootstrap",
 		"--blob-meta",
-		option.BlobMetaPath,
+		option.BlobPath,
 	}
 	args = append(args, option.SourcePath)
 
