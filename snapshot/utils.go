@@ -15,6 +15,11 @@ func isNydusDataLayer(labels map[string]string) bool {
 	return ok
 }
 
+func isNydusRefLayer(labels map[string]string) bool {
+	_, ok := labels[label.NydusRefLayer]
+	return ok
+}
+
 func isNydusMetaLayer(labels map[string]string) bool {
 	_, ok := labels[label.NydusMetaLayer]
 	return ok

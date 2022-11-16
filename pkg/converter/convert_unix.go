@@ -40,7 +40,7 @@ import (
 
 const bootstrapNameInTar = "image.boot"
 const blobNameInTar = "image.blob"
-const blobMetaNameInTar = "image.blob_meta"
+const blobMetaNameInTar = "image.blob.meta"
 
 const envNydusBuilder = "NYDUS_BUILDER"
 const envNydusWorkDir = "NYDUS_WORKDIR"
