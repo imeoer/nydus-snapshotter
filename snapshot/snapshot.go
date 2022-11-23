@@ -43,7 +43,6 @@ import (
 
 	fspkg "github.com/containerd/nydus-snapshotter/pkg/filesystem/fs"
 	"github.com/containerd/nydus-snapshotter/pkg/label"
-	"github.com/containerd/nydus-snapshotter/pkg/ref"
 	"github.com/containerd/nydus-snapshotter/pkg/signature"
 	"github.com/containerd/nydus-snapshotter/pkg/snapshot"
 )
@@ -57,7 +56,6 @@ type snapshotter struct {
 	ms                   *storage.MetaStore
 	fs                   *fspkg.Filesystem
 	blobMgr              *blob.Manager
-	refMgr               *ref.Manager
 	manager              *manager.Manager
 	hasDaemon            bool
 	enableNydusOverlayFS bool
@@ -162,8 +160,6 @@ func NewSnapshotter(ctx context.Context, cfg *config.Config) (snapshots.Snapshot
 		}
 	}
 
-	refMgr := ref.NewManager(cfg.CacheDir, resolve.NewResolver())
-
 	if cfg.EnableMetrics {
 		metricServer, err := metrics.NewServer(
 			ctx,
@@ -213,7 +209,6 @@ func NewSnapshotter(ctx context.Context, cfg *config.Config) (snapshots.Snapshot
 		enableNydusOverlayFS: cfg.EnableNydusOverlayFS,
 		cleanupOnClose:       cfg.CleanupOnClose,
 		blobMgr:              blobMgr,
-		refMgr:               refMgr,
 	}, nil
 }
 
@@ -314,23 +309,8 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 
 	// Handle nydus/stargz image data layers.
 	if target, ok := base.Labels[label.TargetSnapshotRef]; ok {
-		// Check if image layer is nydus ref layer
-		isNydusRef := isNydusRefLayer(base.Labels)
-		if isNydusRef {
-			err = o.refMgr.PrepareRefLayer(base.Labels)
-			if err != nil {
-				logCtx.Errorf("prepare nydus ref layer of snapshot ID %s, err: %v", s.ID, err)
-				return nil, err
-			}
-
-			err = o.Commit(ctx, target, key, append(opts, snapshots.WithLabels(base.Labels))...)
-			if err == nil || errdefs.IsAlreadyExists(err) {
-				return nil, errors.Wrapf(errdefs.ErrAlreadyExists, "target snapshot %q", target)
-			}
-		}
-
 		// check if image layer is nydus data layer
-		if isNydusDataLayer(base.Labels) && !isNydusRef {
+		if isNydusDataLayer(base.Labels) {
 			logCtx.Infof("nydus data layer, skip download and unpack %s", key)
 
 			if o.blobMgr != nil {

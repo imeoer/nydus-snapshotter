@@ -80,7 +80,7 @@ func makeConfig(conf NydusdConfig) error {
 		conf.BackendConfig = `{"dir": "/fake"}`
 		conf.EnablePrefetch = false
 	} else {
-		conf.EnablePrefetch = true
+		conf.EnablePrefetch = false
 	}
 	if err := tpl.Execute(&ret, conf); err != nil {
 		return errors.New("prepare config template for Nydusd")

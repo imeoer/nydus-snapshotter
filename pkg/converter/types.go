@@ -8,11 +8,17 @@ package converter
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/containerd/containerd/content"
 	"github.com/opencontainers/go-digest"
 )
+
+const RafsBlobHeaderSize = 4096
+const RafsBlobHeaderMagic = 0xb10bb10b
+
+var ErrInvalidRafsBlob = fmt.Errorf("invalid rafs blob")
 
 type Layer struct {
 	// Digest represents the hash of whole tar blob.
@@ -87,4 +93,21 @@ type UnpackOption struct {
 	BuilderPath string
 	// Timeout cancels execution once exceed the specified time.
 	Timeout *time.Duration
+}
+
+type RafsBlobHeader struct {
+	Magic              uint32
+	Features           uint32
+	CICompressor       uint32
+	CIEntries          uint32
+	CIOffset           uint64
+	CICompressedSize   uint64
+	CIUncompressedSize uint64
+	CIZranOffset       uint64
+	CIZranSize         uint64
+	CIZranCount        uint32
+	BootstrapSize      uint32
+	BootstrapOffset    uint64
+	Reserved           [4020]byte
+	Magic2             uint32
 }

@@ -38,9 +38,9 @@ import (
 	"github.com/containerd/nydus-snapshotter/pkg/label"
 )
 
-const bootstrapNameInTar = "image.boot"
 const blobNameInTar = "image.blob"
-const blobMetaNameInTar = "image.blob.meta"
+const blobMetaNameInTar = "blob.meta"
+const bootstrapNameInTar = "image.boot"
 
 const envNydusBuilder = "NYDUS_BUILDER"
 const envNydusWorkDir = "NYDUS_WORKDIR"
@@ -122,7 +122,7 @@ func unpackNydusTar(bootDst, blobDst string, ra content.ReaderAt) error {
 	}
 	defer boot.Close()
 
-	if err = unpackBootstrapFromNydusTar(ra, boot); err != nil {
+	if err = unpackFileFromNydusTar(ra, bootstrapNameInTar, boot); err != nil {
 		return errors.Wrap(err, "unpack bootstrap from nydus")
 	}
 
@@ -132,26 +132,26 @@ func unpackNydusTar(bootDst, blobDst string, ra content.ReaderAt) error {
 	}
 	defer blob.Close()
 
-	if err = unpackBlobFromNydusTar(ra, blob); err != nil {
+	if err = unpackFileFromNydusTar(ra, blobNameInTar, blob); err != nil {
 		return errors.Wrap(err, "unpack blob from nydus")
 	}
 
 	return nil
 }
 
-// Unpack the bootstrap from nydus formatted tar stream (blob + bootstrap).
+// Unpack the file from nydus formatted tar stream.
 // The nydus formatted tar stream is a tar-like structure that arranges the
 // data as follows:
 //
-// `blob_data | blob_tar_header | bootstrap_data | bootstrap_tar_header`
-func unpackBootstrapFromNydusTar(ra content.ReaderAt, target io.Writer) error {
-	cur := ra.Size()
-	reader := newSeekReader(ra)
-
+// `data | tar_header | data | tar_header`
+func unpackFileFromNydusTar(ra content.ReaderAt, targetName string, target io.Writer) error {
 	const headerSize = 512
 
-	// Seek from tail to head of nydus formatted tar stream to find nydus
-	// bootstrap data.
+	cur := ra.Size() - headerSize
+	reader := newSeekReader(ra)
+
+	// Seek from tail to head of nydus formatted tar stream to find
+	// target data.
 	for {
 		if headerSize > cur {
 			return fmt.Errorf("invalid tar format at pos %d", cur)
@@ -159,7 +159,7 @@ func unpackBootstrapFromNydusTar(ra content.ReaderAt, target io.Writer) error {
 
 		// Try to seek to the part of tar header.
 		var err error
-		cur, err = reader.Seek(cur-headerSize, io.SeekCurrent)
+		_, err = reader.Seek(cur, io.SeekStart)
 		if err != nil {
 			return errors.Wrapf(err, "seek to %d for tar header", cur-headerSize)
 		}
@@ -171,142 +171,28 @@ func unpackBootstrapFromNydusTar(ra content.ReaderAt, target io.Writer) error {
 			return errors.Wrap(err, "parse tar header")
 		}
 
-		if hdr.Name == bootstrapNameInTar {
-			// Try to seek to the part of tar data (bootstrap_data).
-			if hdr.Size > cur {
-				return fmt.Errorf("invalid tar format at pos %d", cur)
-			}
-			bootstrapOffset := cur - hdr.Size
-			_, err = reader.Seek(bootstrapOffset, io.SeekStart)
-			if err != nil {
-				return errors.Wrap(err, "seek to bootstrap data offset")
-			}
-
-			// Copy tar data (bootstrap_data) to provided target writer.
-			if _, err := io.CopyN(target, reader, hdr.Size); err != nil {
-				return errors.Wrap(err, "copy bootstrap data to reader")
-			}
-
-			return nil
-		}
-
-		if cur == hdr.Size {
-			break
-		}
-	}
-
-	return fmt.Errorf("can't find bootstrap in nydus tar")
-}
-
-// Unpack the blob from nydus formatted tar stream (blob + bootstrap).
-// The nydus formatted tar stream is a tar-like structure that arranges the
-// data as follows:
-//
-// `blob_data | blob_tar_header | bootstrap_data | bootstrap_tar_header`
-func unpackBlobFromNydusTar(ra content.ReaderAt, target io.Writer) error {
-	cur := ra.Size()
-	reader := newSeekReader(ra)
-
-	const headerSize = 512
-
-	// Seek from tail to head of nydus formatted tar stream to find nydus
-	// bootstrap data.
-	for {
-		if headerSize > cur {
-			break
-		}
-
-		// Try to seek to the part of tar header.
-		var err error
-		cur, err = reader.Seek(cur-headerSize, io.SeekStart)
-		if err != nil {
-			return errors.Wrapf(err, "seek to %d for tar header", cur-headerSize)
-		}
-
-		tr := tar.NewReader(reader)
-		// Parse tar header.
-		hdr, err := tr.Next()
-		if err != nil {
-			return errors.Wrap(err, "parse tar header")
-		}
-
-		if hdr.Name == bootstrapNameInTar {
-			if hdr.Size > cur {
-				return fmt.Errorf("invalid tar format at pos %d", cur)
-			}
-			cur, err = reader.Seek(cur-hdr.Size, io.SeekStart)
-			if err != nil {
-				return errors.Wrap(err, "seek to bootstrap data offset")
-			}
-		} else if hdr.Name == blobNameInTar {
-			if hdr.Size > cur {
-				return fmt.Errorf("invalid tar format at pos %d", cur)
-			}
+		if hdr.Name == targetName {
+			// Try to seek to the part of tar data.
 			_, err = reader.Seek(cur-hdr.Size, io.SeekStart)
 			if err != nil {
-				return errors.Wrap(err, "seek to blob data offset")
+				return errors.Wrap(err, "seek to target data offset")
 			}
+
+			// Copy tar data to provided target writer.
 			if _, err := io.CopyN(target, reader, hdr.Size); err != nil {
-				return errors.Wrap(err, "copy blob data to reader")
+				return errors.Wrap(err, "copy target data to reader")
 			}
+
 			return nil
 		}
-	}
 
-	return nil
-}
-
-func UnpackBlobMetaFromNydusTar(ra content.ReaderAt, target io.Writer) error {
-	cur := ra.Size()
-	reader := newSeekReader(ra)
-
-	const headerSize = 512
-
-	// Seek from tail to head of nydus formatted tar stream to find nydus
-	// bootstrap data.
-	for {
-		if headerSize > cur {
+		cur = cur - hdr.Size - headerSize
+		if cur == 0 {
 			break
 		}
-
-		// Try to seek to the part of tar header.
-		var err error
-		cur, err = reader.Seek(cur-headerSize, io.SeekStart)
-		if err != nil {
-			return errors.Wrapf(err, "seek to %d for tar header", cur-headerSize)
-		}
-
-		tr := tar.NewReader(reader)
-		// Parse tar header.
-		hdr, err := tr.Next()
-		if err != nil {
-			return errors.Wrap(err, "parse tar header")
-		}
-
-		if hdr.Name == bootstrapNameInTar {
-			if hdr.Size > cur {
-				return fmt.Errorf("invalid tar format at pos %d", cur)
-			}
-			cur, err = reader.Seek(cur-hdr.Size, io.SeekStart)
-			if err != nil {
-				return errors.Wrap(err, "seek to bootstrap data offset")
-			}
-		} else if hdr.Name == blobMetaNameInTar {
-			if hdr.Size > cur {
-				return fmt.Errorf("invalid tar format at pos %d", cur)
-			}
-			_, err = reader.Seek(cur-hdr.Size, io.SeekStart)
-			if err != nil {
-				return errors.Wrap(err, "seek to blob meta offset")
-			}
-			if _, err := io.CopyN(target, reader, hdr.Size); err != nil {
-				return errors.Wrap(err, "copy blob meta to reader")
-			}
-			return nil
-		}
 	}
 
-	return nil
+	return fmt.Errorf("can't find target in nydus tar")
 }
 
 // Pack converts an OCI tar stream to nydus formatted stream with a tar-like
@@ -481,10 +367,11 @@ func Merge(ctx context.Context, layers []Layer, dest io.Writer, opt MergeOption)
 	defer os.RemoveAll(workDir)
 
 	getBootstrapPath := func(layerIdx int) string {
-		if digest := layers[layerIdx].OriginalDigest; digest != nil {
-			return filepath.Join(workDir, digest.Hex())
+		digestHex := layers[layerIdx].Digest.Hex()
+		if originalDigest := layers[layerIdx].OriginalDigest; originalDigest != nil {
+			return filepath.Join(workDir, fmt.Sprintf("%s.%s", originalDigest.Hex(), digestHex))
 		}
-		return filepath.Join(workDir, layers[layerIdx].Digest.Hex())
+		return filepath.Join(workDir, digestHex)
 	}
 
 	eg, _ := errgroup.WithContext(ctx)
@@ -500,7 +387,7 @@ func Merge(ctx context.Context, layers []Layer, dest io.Writer, opt MergeOption)
 				}
 				defer bootstrap.Close()
 
-				if err := unpackBootstrapFromNydusTar(layers[idx].ReaderAt, bootstrap); err != nil {
+				if err := unpackFileFromNydusTar(layers[idx].ReaderAt, bootstrapNameInTar, bootstrap); err != nil {
 					return errors.Wrap(err, "unpack nydus tar")
 				}
 

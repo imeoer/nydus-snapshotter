@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -38,7 +39,7 @@ import (
 
 const envNydusdPath = "NYDUS_NYDUSD"
 
-var fsVersion = flag.String("fs-version", "5", "specifie the fs version for test")
+var fsVersion = flag.String("fs-version", "6", "specifie the fs version for test")
 
 func hugeString(mb int) string {
 	var buf strings.Builder
@@ -129,6 +130,14 @@ var expectedFileTree = map[string]string{
 	"dir-2/file-1": hugeString(3),
 	"dir-2/file-2": "upper-file-2",
 	"dir-2/file-3": "upper-file-3",
+}
+
+var expectedRefFileTree = map[string]string{
+	"dir-1":        "",
+	"dir-1/file-1": "lower-file-1",
+	"dir-1/file-2": "lower-file-2",
+	"dir-2":        "",
+	"dir-2/file-1": "lower-file-1",
 }
 
 func buildChunkDictTar(t *testing.T) io.ReadCloser {
@@ -225,21 +234,20 @@ func packLayer(t *testing.T, source io.ReadCloser, chunkDict, workDir string, fs
 	return tarBlobFilePath, blobDigest
 }
 
-func packLayerRef(t *testing.T, source io.ReadCloser, workDir string) (string, digest.Digest, digest.Digest) {
-	var data bytes.Buffer
-	writer := io.Writer(&data)
+func packLayerRef(t *testing.T, gzipSource io.ReadCloser, workDir string) (string, digest.Digest, digest.Digest) {
+	var blobMetaData bytes.Buffer
+	blobMetaWriter := io.Writer(&blobMetaData)
 
 	pr, pw := io.Pipe()
 	gzipBlobDigester := digest.Canonical.Digester()
-	zw := gzip.NewWriter(io.MultiWriter(pw, gzipBlobDigester.Hash()))
+	hw := io.MultiWriter(pw, gzipBlobDigester.Hash())
 	go func() {
 		defer pw.Close()
-		_, err := io.Copy(zw, source)
+		_, err := io.Copy(hw, gzipSource)
 		require.NoError(t, err)
-		require.NoError(t, zw.Close())
 	}()
 
-	twc, err := converter.Pack(context.TODO(), writer, converter.PackOption{
+	twc, err := converter.Pack(context.TODO(), blobMetaWriter, converter.PackOption{
 		OCIRef: true,
 	})
 	require.NoError(t, err)
@@ -250,12 +258,12 @@ func packLayerRef(t *testing.T, source io.ReadCloser, workDir string) (string, d
 	require.NoError(t, err)
 
 	blobMetaDigester := digest.Canonical.Digester()
-	_, err = blobMetaDigester.Hash().Write(data.Bytes())
+	_, err = blobMetaDigester.Hash().Write(blobMetaData.Bytes())
 	require.NoError(t, err)
 	blobMetaDigest := blobMetaDigester.Digest()
 
 	tarBlobMetaFilePath := filepath.Join(workDir, blobMetaDigest.Hex())
-	writeToFile(t, bytes.NewReader(data.Bytes()), tarBlobMetaFilePath)
+	writeToFile(t, bytes.NewReader(blobMetaData.Bytes()), tarBlobMetaFilePath)
 
 	gzipBlobDigest := gzipBlobDigester.Digest()
 
@@ -280,7 +288,7 @@ func unpackLayer(t *testing.T, workDir string, ra content.ReaderAt) (string, dig
 	return tarPath, digest
 }
 
-func verify(t *testing.T, workDir string) {
+func verify(t *testing.T, workDir string, expectedFileTree map[string]string) {
 	mountDir := filepath.Join(workDir, "mnt")
 	blobDir := filepath.Join(workDir, "blobs")
 	nydusdPath := os.Getenv(envNydusdPath)
@@ -441,9 +449,9 @@ func TestPack(t *testing.T) {
 	expectedBlobDigests := []digest.Digest{digest.NewDigestFromHex(string(digest.SHA256), chunkDictBlobHash), upperNydusBlobDigest}
 	require.Equal(t, expectedBlobDigests, blobDigests)
 
-	verify(t, workDir)
+	verify(t, workDir, expectedFileTree)
 	dropCache(t)
-	verify(t, workDir)
+	verify(t, workDir, expectedFileTree)
 
 	ensureFile(t, filepath.Join(cacheDir, chunkDictBlobHash)+".chunk_map")
 	ensureNoFile(t, filepath.Join(cacheDir, lowerNydusBlobDigest.Hex())+".chunk_map")
@@ -456,18 +464,42 @@ func TestPackRef(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(workDir)
 
-	lowerOCITarReader := buildOCILowerTar(t)
-	lowerNydusTarPath, lowerNydusBlobDigest, lowerGzipBlobDigest := packLayerRef(t, lowerOCITarReader, workDir)
-
-	lowerTarRa, err := local.OpenReader(lowerNydusTarPath)
+	blobDir := filepath.Join(workDir, "blobs")
+	err = os.MkdirAll(blobDir, 0755)
 	require.NoError(t, err)
-	defer lowerTarRa.Close()
+
+	cacheDir := filepath.Join(workDir, "cache")
+	err = os.MkdirAll(cacheDir, 0755)
+	require.NoError(t, err)
+
+	mountDir := filepath.Join(workDir, "mnt")
+	err = os.MkdirAll(mountDir, 0755)
+	require.NoError(t, err)
+
+	lowerOCITarReader := buildOCILowerTar(t)
+	defer lowerOCITarReader.Close()
+
+	var gzipData bytes.Buffer
+	gzipWriter := gzip.NewWriter(&gzipData)
+	_, err = io.Copy(gzipWriter, lowerOCITarReader)
+	require.NoError(t, err)
+	gzipWriter.Close()
+	dupGzipData := gzipData
+
+	gzipReader := io.NopCloser(&gzipData)
+	lowerNydusBlobPath, lowerNydusBlobDigest, lowerGzipBlobDigest := packLayerRef(t, gzipReader, blobDir)
+
+	writeToFile(t, &dupGzipData, path.Join(blobDir, lowerGzipBlobDigest.Hex()))
+
+	lowerNydusBlobRa, err := local.OpenReader(lowerNydusBlobPath)
+	require.NoError(t, err)
+	defer lowerNydusBlobRa.Close()
 
 	layers := []converter.Layer{
 		{
 			Digest:         lowerNydusBlobDigest,
 			OriginalDigest: &lowerGzipBlobDigest,
-			ReaderAt:       lowerTarRa,
+			ReaderAt:       lowerNydusBlobRa,
 		},
 	}
 
@@ -480,6 +512,8 @@ func TestPackRef(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, []digest.Digest{lowerGzipBlobDigest}, blobDigests)
+
+	verify(t, workDir, expectedRefFileTree)
 }
 
 func TestUnpack(t *testing.T) {
