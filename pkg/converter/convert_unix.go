@@ -29,6 +29,7 @@ import (
 	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/images/converter"
 	"github.com/containerd/containerd/labels"
+	"github.com/containerd/containerd/log"
 	"github.com/containerd/fifo"
 	"github.com/klauspost/compress/zstd"
 	"github.com/opencontainers/go-digest"
@@ -729,13 +730,7 @@ func LayerConvertFunc(opt PackOption) converter.ConvertFunc {
 		}
 
 		if opt.Backend != nil {
-			blobRa, err := cs.ReaderAt(ctx, newDesc)
-			if err != nil {
-				return nil, errors.Wrap(err, "get nydus blob reader")
-			}
-			defer blobRa.Close()
-
-			if err := opt.Backend.Push(ctx, blobRa, blobDigest); err != nil {
+			if err := opt.Backend.Push(ctx, cs, newDesc); err != nil {
 				return nil, errors.Wrap(err, "push to storage backend")
 			}
 		}
@@ -748,7 +743,17 @@ func LayerConvertFunc(opt PackOption) converter.ConvertFunc {
 // called for each blob after conversion is done. The function only hooks
 // the index conversion and the manifest conversion.
 func ConvertHookFunc(opt MergeOption) converter.ConvertHookFunc {
-	return func(ctx context.Context, cs content.Store, orgDesc ocispec.Descriptor, newDesc *ocispec.Descriptor) (*ocispec.Descriptor, error) {
+	return func(ctx context.Context, cs content.Store, orgDesc ocispec.Descriptor, newDesc *ocispec.Descriptor) (desc *ocispec.Descriptor, retErr error) {
+		defer func() {
+			if opt.Backend != nil {
+				cancel := retErr != nil
+				fmt.Println("FINALIZE", cancel, orgDesc.Digest, newDesc)
+				if err := opt.Backend.Finalize(cancel); err != nil {
+					log.G(ctx).WithError(err).Warn("finalize backend")
+				}
+			}
+		}()
+
 		switch {
 		case images.IsIndexType(newDesc.MediaType):
 			return convertIndex(ctx, cs, orgDesc, newDesc)
