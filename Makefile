@@ -17,8 +17,8 @@ VERSION=$(shell git describe --match 'v[0-9]*' --dirty='.m' --always --tags)
 REVISION=$(shell git rev-parse HEAD)$(shell if ! git diff --no-ext-diff --quiet --exit-code; then echo .m; fi)
 
 
-RELEASE=nydus-snapshotter-$(VERSION:v%=%)-${GOOS}-${GOARCH}
-STATIC_RELEASE=nydus-snapshotter-$(VERSION:v%=%)-${GOOS}-static
+RELEASE=nydus-snapshotter-v$(VERSION:v%=%)-${GOOS}-${GOARCH}
+STATIC_RELEASE=nydus-snapshotter-v$(VERSION:v%=%)-${GOOS}-static
 
 # Relpace test target images for e2e tests.
 ifdef E2E_TEST_TARGET_IMAGES_FILE
@@ -72,6 +72,9 @@ static-release:
 	CGO_ENABLED=0 ${PROXY} GOOS=${GOOS} GOARCH=${GOARCH} go build -ldflags "$(LDFLAGS) -extldflags -static" -v -o bin/nydus-overlayfs ./cmd/nydus-overlayfs
 	CGO_ENABLED=0 ${PROXY} GOOS=${GOOS} GOARCH=${GOARCH} go build -ldflags "$(LDFLAGS) -extldflags -static" -v -o bin/optimizer-nri-plugin ./cmd/optimizer-nri-plugin
 	make -C tools/optimizer-server static-release && cp ${OPTIMIZER_SERVER_BIN} ./bin
+
+show:
+	echo $(RELEASE)
 
 package/$(RELEASE).tar.gz: build build-optimizer
 	mkdir -p package
