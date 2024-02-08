@@ -100,7 +100,7 @@ func buildPackArgs(option PackOption) []string {
 			args,
 			"--blob-inline-meta",
 		)
-		if option.AttributesPath != "" {
+		if option.SourcePath != "" {
 			args = append(
 				args,
 				"--type",
