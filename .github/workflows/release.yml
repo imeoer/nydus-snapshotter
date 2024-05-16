@@ -72,6 +72,9 @@ jobs:
           else
             make package GOOS=${{ matrix.build-os }} GOARCH=${{ matrix.build-arch }}
           fi
+      - name: Pin docker image version to release version
+        run: |
+          sed -i "s|ghcr.io/containerd/nydus-snapshotter:latest|ghcr.io/containerd/nydus-snapshotter:${{ github.ref_name }}|" misc/snapshotter/base/nydus-snapshotter.yaml
       - name: upload artifacts
         uses: actions/upload-artifact@v3
         with:
