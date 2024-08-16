@@ -7,6 +7,7 @@
 package supervisor
 
 import (
+	"crypto/rand"
 	"net"
 	"os"
 	"reflect"
@@ -14,7 +15,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"golang.org/x/sys/unix"
 )
 
 func TestSupervisor(t *testing.T) {
@@ -26,49 +26,59 @@ func TestSupervisor(t *testing.T) {
 	})
 
 	supervisorSet, err := NewSupervisorSet(rootDir)
-	assert.Nil(t, err, "%v", err)
+	assert.Nil(t, err)
 
 	su1 := supervisorSet.NewSupervisor("su1")
 	assert.NotNil(t, su1)
+	defer func() {
+		err = supervisorSet.DestroySupervisor("su1")
+		assert.NotNil(t, su1)
+	}()
 
-	_, err = su1.waitStatesTimeout(2 * time.Second)
-	assert.Nil(t, err, "%v", err)
 	sock := su1.Sock()
-
 	addr, err := net.ResolveUnixAddr("unix", sock)
 	assert.Nil(t, err)
 
-	conn, err := net.DialUnix("unix", nil, addr)
-	assert.Nil(t, err, "%v", err)
-
-	sentData := []byte("abcde")
-
-	sentLen, err := conn.Write(sentData)
+	// Build a large data to test the multiple recvmsg / sendmsg
+	// syscalls can handle all the data.
+	sentData := make([]byte, 1024*1024*2)
+	_, err = rand.Read(sentData)
 	assert.Nil(t, err)
 
-	conn.Close()
+	nydusdSendFd := func() error {
+		go func() {
+			conn, err := net.DialUnix("unix", nil, addr)
+			assert.Nil(t, err)
 
-	// FIXME: Delay for some time until states are stored
-	time.Sleep(500 * time.Millisecond)
+			_, err = conn.Write(sentData)
+			assert.Nil(t, err)
 
-	// Must set length not only capacity
-	receivedData := make([]byte, 16, 32)
-	oob := make([]byte, 16, 32)
-	err = su1.SendStatesTimeout(0)
-	assert.Nil(t, err, "%v", err)
+			err = conn.Close()
+			assert.Nil(t, err)
+		}()
 
-	conn1, err := net.DialUnix("unix", nil, addr)
-	assert.Nil(t, err, "%v", err)
+		return nil
+	}
 
-	f, _ := conn1.File()
+	err = su1.FetchDaemonStates(nydusdSendFd)
+	assert.NoError(t, err)
 
-	//nolint:dogsled
-	receivedLen, _, _, _, err := unix.Recvmsg(int(f.Fd()), receivedData, oob, 0)
-	assert.Nil(t, err)
+	nydusdTakeover := func() {
+		err = su1.SendStatesTimeout(0)
+		assert.Nil(t, err)
 
-	assert.Equal(t, sentLen, receivedLen)
-	assert.True(t, reflect.DeepEqual(receivedData[:receivedLen], sentData), "%v", receivedData)
+		conn1, err := net.DialUnix("unix", nil, addr)
+		assert.Nil(t, err)
 
+		f, _ := conn1.File()
+		recvData, _, err := recv(f)
+		assert.Nil(t, err)
+
+		assert.Equal(t, len(sentData), len(recvData))
+		assert.True(t, reflect.DeepEqual(recvData, sentData))
+	}
+
+	nydusdTakeover()
 }
 
 func TestSupervisorTimeout(t *testing.T) {
